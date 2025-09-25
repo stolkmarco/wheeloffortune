@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TP Wheel of Fortune</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">TP</div>
+    <h1>TP Wheel of Fortune</h1>
+    <button id="openAdmin" class="btn outline">Admin Panel</button>
+  </header>
+  <main class="container">
+    <section class="card play">
+      <canvas id="wheel" width="520" height="520"></canvas>
+      <div class="controls">
+        <button id="spinBtn" class="btn primary">Spin</button>
+        <div id="result" class="result"></div>
+      </div>
+    </section>
+  </main>
+  <dialog id="adminDialog">
+    <form method="dialog" class="admin-form">
+      <header>
+        <h2>Admin Panel</h2>
+        <button id="closeAdmin" class="icon-btn" formnovalidate>&times;</button>
+      </header>
+      <label class="row"><span>Selection Mode</span>
+        <select id="mode"><option value="random">Random</option><option value="predefined">Predefined</option></select>
+      </label>
+      <div id="predefRow" class="row hidden"><span>Land On</span><select id="predefinedTarget"></select></div>
+      <label class="row"><span># of Sections</span><input id="sections" type="number" min="2" max="24" step="1" /></label>
+      <div id="labelsWrap" class="labels"></div>
+      <footer><button id="saveConfig" class="btn primary" value="default">Save</button>
+      <button id="resetConfig" class="btn subtle" formnovalidate>Reset</button></footer>
+    </form>
+  </dialog>
+  <script>window.__TP_BRAND__ = {"pink": "#ff0082", "purple": "#780096", "violet": "#8042CF", "blue": "#3047b0", "light_blue": "#0087ff", "turquoise": "#00AF9B", "green_flash": "#00D769", "orange": "#ff5c00", "yellow": "#f5d200", "bg": "#e6e6e5", "text": "#414141"};</script>
+  <script src="./app.js"></script>
+</body>
+</html>
