@@ -22,7 +22,7 @@ const bulkFileEl = document.getElementById('bulkFile');
 document.getElementById('resetConfig').onclick = (e)=>{
   e.preventDefault();
   localStorage.removeItem('tp-wheel-config');
-  loadConfig(true);
+  if (!tryLoadLastPreset()) { loadConfig(true); } refreshPresetUI();
 };
 
 document.getElementById('saveConfig').onclick = (e)=>{
@@ -180,6 +180,33 @@ function computeWrapWidth(n, r){
   return Math.max(40, Math.min(160, Math.round(est)));
 }
 
+
+// v22: single-line label fitting (no wrapping/hyphens)
+function computeMaxTextWidth(n, r){
+  // estimate based on arc length inside slice
+  const angle = (Math.PI*2)/n;
+  const usableArc = angle * (r - 40);
+  // clamp to reasonable range
+  return Math.max(60, Math.min(200, Math.round(usableArc * 0.75)));
+}
+function baseFontSize(n){
+  // Scale with slice angle; clamp
+  const angleDeg = 360 / n;
+  return Math.max(9, Math.min(22, Math.round(10 + 0.18*angleDeg)));
+}
+function drawSingleLineText(ctx, text, maxWidth, minPx, startPx){
+  // keep spaces; do not hyphenate. shrink font until fits
+  let size = startPx;
+  ctx.font = `bold ${size}px Inter, sans-serif`;
+  // replace normal spaces with NBSP to avoid accidental collapse (just visual, not required for canvas)
+  const s = text;
+  while (ctx.measureText(s).width > maxWidth && size > minPx){
+    size -= 1;
+    ctx.font = `bold ${size}px Inter, sans-serif`;
+  }
+  return size; // caller already set fillStyle/alignment and will draw with ctx.fillText
+}
+
 function drawWheel(){
   const cfg = JSON.parse(localStorage.getItem('tp-wheel-config'));
   const W = canvas.width, H = canvas.height;
@@ -327,5 +354,96 @@ spinBtn.addEventListener('click', ()=>{
   requestAnimationFrame(raf);
 });
 
+
+// v22 Presets
+const presetNameInput = document.getElementById('presetName');
+const presetSelect = document.getElementById('presetSelect');
+const savePresetBtn = document.getElementById('savePreset');
+const deletePresetBtn = document.getElementById('deletePreset');
+
+function getPresets(){
+  try { return JSON.parse(localStorage.getItem('tp-wheel-presets')||'{}'); } catch(e){ return {}; }
+}
+function setPresets(p){ localStorage.setItem('tp-wheel-presets', JSON.stringify(p)); }
+function refreshPresetUI(){
+  const p = getPresets();
+  const names = Object.keys(p).sort((a,b)=>a.localeCompare(b));
+  presetSelect.innerHTML = '';
+  const ph = document.createElement('option'); ph.value=''; ph.textContent='— Select preset —'; presetSelect.appendChild(ph);
+  names.forEach(n=>{ const opt=document.createElement('option'); opt.value=n; opt.textContent=n; presetSelect.appendChild(opt); });
+  const last = localStorage.getItem('tp-wheel-last-preset');
+  if (last && p[last]){
+    // show last as selected in dropdown for convenience
+    for (const o of presetSelect.options){ if (o.value===last) o.selected=true; }
+  }
+}
+function saveCurrentAsPreset(name){
+  if (!name){ alert('Enter a preset name first.'); return; }
+  const cfg = JSON.parse(localStorage.getItem('tp-wheel-config'));
+  // clamp to 70 for safety
+  cfg.n = Math.min(70, Math.max(2, cfg.n|0));
+  if (cfg.labels.length !== cfg.n){ cfg.labels = cfg.labels.slice(0, cfg.n); }
+  const p = getPresets();
+  p[name] = cfg;
+  setPresets(p);
+  localStorage.setItem('tp-wheel-last-preset', name);
+  refreshPresetUI();
+  alert(`Saved preset: ${name}`);
+}
+function loadPresetByName(name){
+  const p = getPresets();
+  const cfg = p[name];
+  if (!cfg){ alert('Preset not found'); return; }
+  cfg.n = Math.min(70, Math.max(2, cfg.n|0));
+  if (!Array.isArray(cfg.labels)) cfg.labels = [];
+  cfg.labels = cfg.labels.slice(0, cfg.n);
+  localStorage.setItem('tp-wheel-config', JSON.stringify(cfg));
+  localStorage.setItem('tp-wheel-last-preset', name);
+  // hydrate admin + redraw
+  modeSel.value = cfg.mode || 'random';
+  sectionsInput.value = cfg.n;
+  renderLabelInputs(cfg.labels);
+  buildTargetOptions(cfg.labels, cfg.target);
+  predefRow.classList.toggle('hidden', modeSel.value!=='predefined');
+  drawWheel();
+}
+function deletePresetByName(name){
+  const p = getPresets();
+  if (!p[name]) return;
+  delete p[name];
+  setPresets(p);
+  const last = localStorage.getItem('tp-wheel-last-preset');
+  if (last === name) localStorage.removeItem('tp-wheel-last-preset');
+  refreshPresetUI();
+  alert(`Deleted preset: ${name}`);
+}
+
+savePresetBtn?.addEventListener('click', ()=>{
+  const name = (presetNameInput.value||'').trim();
+  if (!name) return alert('Please enter a preset name.');
+  const p = getPresets();
+  if (p[name] && !confirm('Preset exists. Overwrite?')) return;
+  saveCurrentAsPreset(name);
+});
+deletePresetBtn?.addEventListener('click', ()=>{
+  const sel = presetSelect.value;
+  if (!sel) return alert('Select a preset to delete.');
+  if (confirm(`Delete preset "${sel}"?`)) deletePresetByName(sel);
+});
+presetSelect?.addEventListener('change', ()=>{
+  const sel = presetSelect.value;
+  if (sel) loadPresetByName(sel);
+});
+
+function tryLoadLastPreset(){
+  const last = localStorage.getItem('tp-wheel-last-preset');
+  const p = getPresets();
+  if (last && p[last]){
+    loadPresetByName(last);
+    return true;
+  }
+  return false;
+}
+
 // init
-loadConfig(true);
+if (!tryLoadLastPreset()) { loadConfig(true); } refreshPresetUI();

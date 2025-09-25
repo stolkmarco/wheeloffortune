@@ -5,3 +5,5 @@ TP Wheel of Fortune v20
 
 
 v21: Dynamic font sizing, 70-section cap.
+
+v22: Single-line labels + Presets (save/load/delete + auto-load last).
