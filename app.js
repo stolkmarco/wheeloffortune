@@ -1,4 +1,4 @@
-// TP Wheel v20 with easing + bulk import
+// TP Wheel v26 - shared presets via /api/presets.js
 const brand = window.__TP_BRAND__ || {};
 const canvas = document.getElementById('wheel');
 const ctx = canvas.getContext('2d');
@@ -15,14 +15,20 @@ const labelsWrap = document.getElementById('labelsWrap');
 const predefRow = document.getElementById('predefRow');
 const targetSel = document.getElementById('predefinedTarget');
 
+// Presets UI
+const presetNameInput = document.getElementById('presetName');
+const presetSelect = document.getElementById('presetSelect');
+const savePresetBtn = document.getElementById('savePreset');
+const deletePresetBtn = document.getElementById('deletePreset');
+
 // Bulk import elements
 const bulkTextEl = document.getElementById('bulkText');
 const bulkFileEl = document.getElementById('bulkFile');
 
 document.getElementById('resetConfig').onclick = (e)=>{
   e.preventDefault();
-  localStorage.removeItem('tp-wheel-config');
-  if (!tryLoadLastPreset()) { loadConfig(true); } refreshPresetUI();
+  localStorage.removeItem('tp-wheel-config'); // current working set only
+  loadConfig(true);
 };
 
 document.getElementById('saveConfig').onclick = (e)=>{
@@ -39,9 +45,96 @@ document.getElementById('saveConfig').onclick = (e)=>{
   adminDialog.close();
 };
 
+// ---- Shared Presets API ----
+async function apiGetPresets(){
+  const res = await fetch('./presets.json?ts=' + Date.now(), { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to load presets.json');
+  return await res.json();
+}
+async function apiSavePresets(presets){
+  const res = await fetch('./api/presets', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(presets)
+  });
+  if (!res.ok) throw new Error('Failed to save presets');
+  return await res.json();
+}
+
+function getWorkingConfig(){
+  let cfg=null;
+  try{ cfg = JSON.parse(localStorage.getItem('tp-wheel-config')||'null'); }catch(e){}
+  if (!cfg){
+    cfg = { mode:'random', n:6, labels:['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'], target:null };
+    localStorage.setItem('tp-wheel-config', JSON.stringify(cfg));
+  }
+  return cfg;
+}
+
+async function refreshPresetUI(){
+  const presets = await apiGetPresets().catch(()=> ({}));
+  presetSelect.innerHTML='';
+  const ph = document.createElement('option'); ph.value=''; ph.textContent='— Select preset —'; presetSelect.appendChild(ph);
+  Object.keys(presets).sort((a,b)=>a.localeCompare(b)).forEach(name=>{
+    const opt=document.createElement('option'); opt.value=name; opt.textContent=name; presetSelect.appendChild(opt);
+  });
+}
+
+function cfgClamp(cfg){
+  const out = JSON.parse(JSON.stringify(cfg || {}));
+  out.n = Math.min(70, Math.max(2, parseInt(out.n||out.labels?.length||6,10)));
+  if (!Array.isArray(out.labels)) out.labels = [];
+  out.labels = out.labels.slice(0, out.n);
+  out.mode = (out.mode==='predefined') ? 'predefined' : 'random';
+  if (out.target != null) out.target = String(out.target);
+  return out;
+}
+
+savePresetBtn?.addEventListener('click', async ()=>{
+  const name = (presetNameInput.value||'').trim();
+  if (!name) return alert('Enter a preset name first.');
+  const presets = await apiGetPresets().catch(()=> ({}));
+  const cfg = cfgClamp(getWorkingConfig());
+  presets[name] = cfg;
+  try{
+    await apiSavePresets(presets);
+    alert('Preset saved to server.');
+    await refreshPresetUI();
+  }catch(e){ alert('Failed to save preset to server.'); }
+});
+
+deletePresetBtn?.addEventListener('click', async ()=>{
+  const sel = presetSelect.value;
+  if (!sel) return alert('Select a preset to delete.');
+  const presets = await apiGetPresets().catch(()=> ({}));
+  if (!presets[sel]) return;
+  delete presets[sel];
+  try{
+    await apiSavePresets(presets);
+    alert('Preset deleted.');
+    await refreshPresetUI();
+  }catch(e){ alert('Failed to delete preset on server.'); }
+});
+presetSelect?.addEventListener('change', async ()=>{
+  const sel = presetSelect.value;
+  if (!sel) return;
+  const presets = await apiGetPresets().catch(()=> ({}));
+  const cfg = presets[sel];
+  if (!cfg) return alert('Preset not found on server.');
+  const c = cfgClamp(cfg);
+  localStorage.setItem('tp-wheel-config', JSON.stringify(c));
+  modeSel.value = c.mode || 'random';
+  sectionsInput.value = c.n;
+  renderLabelInputs(c.labels);
+  buildTargetOptions(c.labels, c.target);
+  predefRow.classList.toggle('hidden', modeSel.value!=='predefined');
+  drawWheel();
+});
+
+// ---- Config form dynamics ----
 function loadConfig(resetIfMissing=false){
   let cfg = null;
-  try { cfg = JSON.parse(localStorage.getItem('tp-wheel-config')||'null'); } catch(e){ console.error("⚠️ parse config", e); }
+  try { cfg = JSON.parse(localStorage.getItem('tp-wheel-config')||'null'); } catch(e){}
   if (!cfg || resetIfMissing){
     cfg = { mode:'random', n:6, labels:['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'], target:null };
     localStorage.setItem('tp-wheel-config', JSON.stringify(cfg));
@@ -89,13 +182,13 @@ function buildTargetOptions(labels, selected=null){
 
 // Bulk import utilities
 function normalizeNames(list){
-  const names = list.map(s => (s ?? '').toString().trim()).filter(s => s.length>0);
+  const names = list.map(s => (s ?? '').toString().replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim()).filter(s => s.length>0);
   if (names.length > 70) alert(`Imported ${names.length} items. Only the first 70 will be used.`);
   return names.slice(0,70);
 }
 function applyNamesToConfig(names){
   if (!names || !names.length){ alert('No names found to import.'); return; }
-  const cfg = JSON.parse(localStorage.getItem('tp-wheel-config'));
+  const cfg = getWorkingConfig();
   cfg.n = names.length;
   cfg.labels = names;
   if (cfg.target != null && parseInt(cfg.target,10) >= cfg.n){ cfg.target = null; }
@@ -121,7 +214,10 @@ bulkFileEl?.addEventListener('change', async (e)=>{
       const wsName = wb.SheetNames[0];
       const ws = wb.Sheets[wsName];
       const rows = XLSX.utils.sheet_to_json(ws, { header:1 });
-      const firstCol = rows.map(r => Array.isArray(r) ? r.find(v => v!=null && String(v).trim().length>0) : null);
+      const firstCol = rows.map(r => {
+        let v = Array.isArray(r) ? r.find(v => v!=null && String(v).trim().length>0) : null;
+        return v==null ? null : String(v).replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim();
+      });
       const names = normalizeNames(firstCol);
       applyNamesToConfig(names);
     } else {
@@ -140,310 +236,120 @@ bulkFileEl?.addEventListener('change', async (e)=>{
   }
 });
 
-// Colors and geometry
+// Colors & geometry
 const SLICE_COLORS = ["#ff0082","#780096","#8042CF","#3047b0","#0087ff","#00AF9B","#00D769","#ff5c00","#f5d200"];
 function wheelRadius(){ return Math.min(canvas.width, canvas.height)/2 - 36; }
-
-function drawBezel(cx, cy, r){
-  ctx.save();
-  ctx.beginPath(); ctx.lineWidth = 22; ctx.strokeStyle = '#e6e6e5'; ctx.arc(cx, cy, r + 18, 0, Math.PI*2); ctx.stroke();
-  ctx.beginPath(); ctx.lineWidth = 8; ctx.strokeStyle = '#41414155'; ctx.arc(cx, cy, r + 6, 0, Math.PI*2); ctx.stroke();
+function drawBezel(cx, cy, r){ ctx.save();
+  ctx.beginPath(); ctx.lineWidth=22; ctx.strokeStyle='#e6e6e5'; ctx.arc(cx,cy,r+18,0,Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.lineWidth=8; ctx.strokeStyle='#41414155'; ctx.arc(cx,cy,r+6,0,Math.PI*2); ctx.stroke();
   ctx.restore();
 }
-function drawHub(cx, cy){ ctx.beginPath(); ctx.arc(cx, cy, 70, 0, Math.PI*2); ctx.fillStyle = '#1d1b26'; ctx.fill(); }
-function drawPointer(cx, cy, r){
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.beginPath();
-  ctx.moveTo(0, -r - 6);
-  ctx.lineTo(-18, -r - 30);
-  ctx.lineTo(18, -r - 30);
-  ctx.closePath();
-  ctx.fillStyle = '#d0d2d6';
-  ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
-  ctx.fill(); ctx.stroke();
-  ctx.restore();
+function drawHub(cx, cy){ ctx.beginPath(); ctx.arc(cx,cy,70,0,Math.PI*2); ctx.fillStyle='#1d1b26'; ctx.fill(); }
+function drawPointer(cx, cy, r){ ctx.save(); ctx.translate(cx,cy);
+  ctx.beginPath(); ctx.moveTo(0, -r - 6); ctx.lineTo(-18, -r - 30); ctx.lineTo(18, -r - 30); ctx.closePath();
+  ctx.fillStyle='#d0d2d6'; ctx.strokeStyle='#000'; ctx.lineWidth=3; ctx.fill(); ctx.stroke(); ctx.restore();
 }
 
-
-// v21: font sizing to fit sections
-function computeFontSize(n, r){
-  const angle = (Math.PI*2)/n;
-  const angleDeg = 360/n;
-  // Base on angle size, clamp between 9 and 22px
-  const size = Math.max(9, Math.min(22, Math.round(10 + 0.18*angleDeg)));
-  return size;
-}
-function computeWrapWidth(n, r){
-  const angle = (Math.PI*2)/n;
-  const est = (r-40) * angle * 0.75; // fraction of arc length
-  return Math.max(40, Math.min(160, Math.round(est)));
-}
-
-
-// v22: single-line label fitting (no wrapping/hyphens)
-function computeMaxTextWidth(n, r){
-  // estimate based on arc length inside slice
-  const angle = (Math.PI*2)/n;
-  const usableArc = angle * (r - 40);
-  // clamp to reasonable range
-  return Math.max(60, Math.min(200, Math.round(usableArc * 0.75)));
-}
-function baseFontSize(n){
-  // Scale with slice angle; clamp
-  const angleDeg = 360 / n;
-  return Math.max(9, Math.min(22, Math.round(10 + 0.18*angleDeg)));
-}
+// Single-line labels
+function processLabelText(s){ return (s||'').toString().replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim().replace(/ /g,'\u00A0'); }
+function computeMaxTextWidth(n, r){ const angle=(Math.PI*2)/n; const usable=(r-40)*angle; return Math.max(60, Math.min(200, Math.round(usable*0.75))); }
+function baseFontSize(n){ const angleDeg = 360/n; return Math.max(9, Math.min(22, Math.round(10 + 0.18*angleDeg))); }
 function drawSingleLineText(ctx, text, maxWidth, minPx, startPx){
-  // keep spaces; do not hyphenate. shrink font until fits
   let size = startPx;
   ctx.font = `bold ${size}px Inter, sans-serif`;
-  // replace normal spaces with NBSP to avoid accidental collapse (just visual, not required for canvas)
-  const s = text;
-  while (ctx.measureText(s).width > maxWidth && size > minPx){
-    size -= 1;
-    ctx.font = `bold ${size}px Inter, sans-serif`;
+  while (ctx.measureText(text).width > maxWidth && size > minPx){
+    size -= 1; ctx.font = `bold ${size}px Inter, sans-serif`;
   }
-  return size; // caller already set fillStyle/alignment and will draw with ctx.fillText
+  return size;
 }
 
+// Draw wheel
 function drawWheel(){
-  const cfg = JSON.parse(localStorage.getItem('tp-wheel-config'));
-  const W = canvas.width, H = canvas.height;
-  const cx = W/2, cy = H/2, r = wheelRadius();
-  ctx.clearRect(0,0,W,H);
-  drawBezel(cx, cy, r);
+  const cfg = getWorkingConfig();
+  const W=canvas.width,H=canvas.height; const cx=W/2, cy=H/2, r=wheelRadius();
+  ctx.clearRect(0,0,W,H); drawBezel(cx,cy,r);
+  const n=Math.max(2, cfg.n|0), labels=cfg.labels||[]; const angle=(Math.PI*2)/n;
 
-  const n = Math.max(2, cfg.n|0);
-  const labels = cfg.labels || [];
-  const angle = (Math.PI*2)/n;
+  for (let i=0;i<n;i++){ ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,r, i*angle,(i+1)*angle); ctx.closePath();
+    ctx.fillStyle=SLICE_COLORS[i%SLICE_COLORS.length]; ctx.fill(); ctx.strokeStyle='#00000040'; ctx.lineWidth=2; ctx.stroke(); }
 
-  for (let i=0;i<n;i++){
-    ctx.beginPath();
-    ctx.moveTo(cx,cy);
-    ctx.arc(cx,cy,r, i*angle, (i+1)*angle);
-    ctx.closePath();
-    ctx.fillStyle = SLICE_COLORS[i % SLICE_COLORS.length];
-    ctx.fill();
-    ctx.strokeStyle = '#00000040'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.save(); ctx.translate(cx,cy);
+  ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#fff';
+  for (let i=0;i<n;i++){ const a=i*angle+angle/2; const tx=Math.cos(a)*(r-60); const ty=Math.sin(a)*(r-60);
+    const raw=(labels[i]||`Option ${i+1}`); const txt=processLabelText(raw);
+    const maxW=computeMaxTextWidth(n,r); const fs=drawSingleLineText(ctx, txt, maxW, 8, baseFontSize(n));
+    ctx.save(); ctx.translate(tx,ty); ctx.rotate(a); ctx.font=`bold ${fs}px Inter, sans-serif`; ctx.fillText(txt,0,0); ctx.restore();
   }
-
-  ctx.save(); ctx.translate(cx, cy);
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff'; const __fs = computeFontSize(n, r); ctx.font = `bold ${__fs}px Inter, sans-serif`;
-  for (let i=0;i<n;i++){
-    const a = i*angle + angle/2;
-    const tx = Math.cos(a)*(r-60);
-    const ty = Math.sin(a)*(r-60);
-    const txt = (labels[i]||`Option ${i+1}`).slice(0,26);
-    ctx.save(); ctx.translate(tx,ty); ctx.rotate(a); wrapText(ctx, txt, 0, 0, computeWrapWidth(n, r), Math.round(__fs*1.15)); ctx.restore();
-  }
-  ctx.restore();
-
-  drawHub(cx, cy);
-  drawPointer(cx, cy, r);
+  ctx.restore(); drawHub(cx,cy); drawPointer(cx,cy,r);
 }
 
+// Rotation render
+let spinning=false, rotation=0, animStart=0, animDuration=3200, startRot=0, totalDelta=0, plannedLabelIndex=null;
 function renderRotation(){
-  const cfg = JSON.parse(localStorage.getItem('tp-wheel-config'));
-  const W = canvas.width, H = canvas.height;
-  const cx = W/2, cy = H/2, r = wheelRadius();
-  ctx.clearRect(0,0,W,H);
-  drawBezel(cx, cy, r);
-
-  const n = Math.max(2, cfg.n|0);
-  const labels = cfg.labels || [];
-  const angle = (Math.PI*2)/n;
+  const cfg = getWorkingConfig();
+  const W=canvas.width,H=canvas.height; const cx=W/2, cy=H/2, r=wheelRadius();
+  ctx.clearRect(0,0,W,H); drawBezel(cx,cy,r);
+  const n=Math.max(2, cfg.n|0), labels=cfg.labels||[]; const angle=(Math.PI*2)/n;
 
   ctx.save(); ctx.translate(cx,cy); ctx.rotate(rotation);
-  for (let i=0;i<n;i++){
-    ctx.beginPath();
-    ctx.moveTo(0,0);
-    ctx.arc(0,0,r, i*angle, (i+1)*angle);
-    ctx.closePath();
-    ctx.fillStyle = SLICE_COLORS[i % SLICE_COLORS.length];
-    ctx.fill();
-    ctx.strokeStyle = '#00000040'; ctx.lineWidth = 2; ctx.stroke();
+  for (let i=0;i<n;i++){ ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0,0,r, i*angle,(i+1)*angle); ctx.closePath();
+    ctx.fillStyle=SLICE_COLORS[i%SLICE_COLORS.length]; ctx.fill(); ctx.strokeStyle='#00000040'; ctx.lineWidth=2; ctx.stroke(); }
+  ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#fff';
+  for (let i=0;i<n;i++){ const a=i*angle+angle/2; const tx=Math.cos(a)*(r-60); const ty=Math.sin(a)*(r-60);
+    const raw=(labels[i]||`Option ${i+1}`); const txt=processLabelText(raw);
+    const maxW=computeMaxTextWidth(n,r); const fs=drawSingleLineText(ctx, txt, maxW, 8, baseFontSize(n));
+    ctx.save(); ctx.translate(tx,ty); ctx.rotate(a); ctx.font=`bold ${fs}px Inter, sans-serif`; ctx.fillText(txt,0,0); ctx.restore();
   }
-
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff'; const __fs = computeFontSize(n, r); ctx.font = `bold ${__fs}px Inter, sans-serif`;
-  for (let i=0;i<n;i++){
-    const a = i*angle + angle/2;
-    const tx = Math.cos(a)*(r-60);
-    const ty = Math.sin(a)*(r-60);
-    const txt = (labels[i]||`Option ${i+1}`).slice(0,26);
-    ctx.save(); ctx.translate(tx,ty); ctx.rotate(a); wrapText(ctx, txt, 0, 0, computeWrapWidth(n, r), Math.round(__fs*1.15)); ctx.restore();
-  }
-  ctx.restore();
-
-  drawHub(cx, cy);
-  drawPointer(cx, cy, r);
+  ctx.restore(); drawHub(cx,cy); drawPointer(cx,cy,r);
 }
 
-function wrapText(ctx, text, x, y, maxWidth, lineHeight){
-  const words = text.split(' ');
-  let line = ''; let yy = y;
-  for (let n=0;n<words.length;n++){
-    const test = line + words[n] + ' ';
-    if (ctx.measureText(test).width > maxWidth && n>0){
-      ctx.fillText(line.trim(), x, yy);
-      line = words[n] + ' '; yy += lineHeight;
-    } else line = test;
+
+function getLiveConfigForSpin(){
+  // Read what's on the form right now, fall back to working config if missing
+  const cfg = getWorkingConfig();
+  const live = { ...cfg };
+  // mode
+  if (modeSel && modeSel.value) live.mode = modeSel.value;
+  // n and labels from inputs (if present)
+  const nInput = parseInt(sectionsInput?.value || live.n || 6, 10);
+  live.n = Math.max(2, Math.min(70, isNaN(nInput) ? (live.n||6) : nInput));
+  const labels = [];
+  for (let i=0;i<live.n;i++){
+    const el = document.getElementById('label_'+i);
+    labels.push(el ? el.value.trim() || `Option ${i+1}` : (cfg.labels[i] || `Option ${i+1}`));
   }
-  ctx.fillText(line.trim(), x, yy);
+  live.labels = labels;
+  // target
+  if (targetSel && targetSel.value !== undefined && targetSel.value !== null && targetSel.value !== '') {
+    live.target = targetSel.value;
+  }
+  return live;
 }
 
-// Easing-based spin (looks random but lands on chosen target)
-let spinning=false, rotation=0, animStart=0, animDuration=3200, startRot=0, totalDelta=0, plannedLabelIndex=null;
+// Easing spin
 function easeOutCubic(x){ return 1 - Math.pow(1 - x, 3); }
-function raf(ts){
-  if(!spinning) return;
-  if(!animStart) animStart = ts;
-  const t = Math.min(1, (ts - animStart) / animDuration);
-  rotation = startRot + totalDelta * easeOutCubic(t);
-  renderRotation();
-  if (t >= 1){
-    spinning = false;
-    finalizeLanding(plannedLabelIndex);
-    return;
-  }
-  requestAnimationFrame(raf);
-}
+function raf(ts){ if(!spinning) return; if(!animStart) animStart=ts; const t=Math.min(1,(ts-animStart)/animDuration);
+  rotation=startRot+totalDelta*easeOutCubic(t); renderRotation(); if(t>=1){ spinning=false; finalizeLanding(plannedLabelIndex); return; } requestAnimationFrame(raf); }
 function finalizeLanding(predefIndex=null){
-  const cfg = JSON.parse(localStorage.getItem('tp-wheel-config'));
-  const n = Math.max(2, cfg.n|0);
-  const anglePer = (Math.PI*2)/n;
-  const twoPI = Math.PI*2;
-  if (predefIndex!==null){
-    const idx = predefIndex % n;
-    resultEl.textContent = `Result: ${cfg.labels[idx] || `Option ${idx+1}`}`;
-    return;
-  }
-  const current = ((rotation % twoPI) + twoPI) % twoPI;
-  const theta = ((-Math.PI/2 - current) % twoPI + twoPI) % twoPI;
-  const index = Math.floor(theta / anglePer) % n;
+  const cfg = getLiveConfigForSpin(); const n=Math.max(2,cfg.n|0); const anglePer=(Math.PI*2)/n; const twoPI=Math.PI*2;
+  if(predefIndex!==null){ const idx=predefIndex % n; resultEl.textContent = `Result: ${cfg.labels[idx] || `Option ${idx+1}`}`; return; }
+  const current=((rotation % twoPI)+twoPI)%twoPI; const theta=((-Math.PI/2 - current) % twoPI + twoPI) % twoPI; const index=Math.floor(theta/anglePer)%n;
   resultEl.textContent = `Result: ${cfg.labels[index] || `Option ${index+1}`}`;
 }
 spinBtn.addEventListener('click', ()=>{
   if (spinning) return;
-  const cfg = JSON.parse(localStorage.getItem('tp-wheel-config'));
-  const n = Math.max(2, cfg.n|0);
-  const anglePer = (Math.PI*2)/n;
-  const twoPI = Math.PI*2;
-
-  startRot = rotation;
-  animStart = 0;
-  animDuration = 2800 + Math.random()*1200; // 2.8–4.0s
-  const extraSpins = 6 + Math.floor(Math.random()*5); // 6–10 spins
-
-  plannedLabelIndex = null;
-  if (cfg.mode === 'predefined' && cfg.target != null){
-    const idx = parseInt(cfg.target, 10) % n;
-    plannedLabelIndex = idx;
-    const targetCenter = (idx + 0.5) * anglePer;
-    const desiredAbs = (-Math.PI/2 - targetCenter);
-    const currentNorm = ((rotation % twoPI) + twoPI) % twoPI;
-    const deltaToDesired = ((desiredAbs - currentNorm) % twoPI + twoPI) % twoPI;
-    const jitter = (Math.random()*0.4 - 0.2) * anglePer * 0.5; // stays within slice
-    totalDelta = extraSpins*twoPI + deltaToDesired + jitter;
-  } else {
-    totalDelta = extraSpins*twoPI + Math.random()*twoPI;
-  }
-
-  spinning = true;
-  resultEl.textContent = 'Spinning...';
-  requestAnimationFrame(raf);
+  const cfg = getLiveConfigForSpin(); const n=Math.max(2,cfg.n|0); const anglePer=(Math.PI*2)/n; const twoPI=Math.PI*2;
+  startRot=rotation; animStart=0; animDuration=2800+Math.random()*1200; const extraSpins=6+Math.floor(Math.random()*5); plannedLabelIndex=null;
+  if (cfg.mode==='predefined' && cfg.target!=null){ const idx=parseInt(cfg.target,10)%n; plannedLabelIndex=idx;
+    const targetCenter=(idx+0.5)*anglePer; const desiredAbs=(-Math.PI/2 - targetCenter);
+    const currentNorm=((rotation % twoPI)+twoPI)%twoPI; const delta=((desiredAbs - currentNorm)%twoPI + twoPI)%twoPI;
+    const jitter=(Math.random()*0.4-0.2)*anglePer*0.5; totalDelta = extraSpins*twoPI + delta + jitter;
+  } else { totalDelta = extraSpins*twoPI + Math.random()*twoPI; }
+  spinning=true; resultEl.textContent='Spinning...'; requestAnimationFrame(raf);
 });
 
-
-// v22 Presets
-const presetNameInput = document.getElementById('presetName');
-const presetSelect = document.getElementById('presetSelect');
-const savePresetBtn = document.getElementById('savePreset');
-const deletePresetBtn = document.getElementById('deletePreset');
-
-function getPresets(){
-  try { return JSON.parse(localStorage.getItem('tp-wheel-presets')||'{}'); } catch(e){ return {}; }
-}
-function setPresets(p){ localStorage.setItem('tp-wheel-presets', JSON.stringify(p)); }
-function refreshPresetUI(){
-  const p = getPresets();
-  const names = Object.keys(p).sort((a,b)=>a.localeCompare(b));
-  presetSelect.innerHTML = '';
-  const ph = document.createElement('option'); ph.value=''; ph.textContent='— Select preset —'; presetSelect.appendChild(ph);
-  names.forEach(n=>{ const opt=document.createElement('option'); opt.value=n; opt.textContent=n; presetSelect.appendChild(opt); });
-  const last = localStorage.getItem('tp-wheel-last-preset');
-  if (last && p[last]){
-    // show last as selected in dropdown for convenience
-    for (const o of presetSelect.options){ if (o.value===last) o.selected=true; }
-  }
-}
-function saveCurrentAsPreset(name){
-  if (!name){ alert('Enter a preset name first.'); return; }
-  const cfg = JSON.parse(localStorage.getItem('tp-wheel-config'));
-  // clamp to 70 for safety
-  cfg.n = Math.min(70, Math.max(2, cfg.n|0));
-  if (cfg.labels.length !== cfg.n){ cfg.labels = cfg.labels.slice(0, cfg.n); }
-  const p = getPresets();
-  p[name] = cfg;
-  setPresets(p);
-  localStorage.setItem('tp-wheel-last-preset', name);
-  refreshPresetUI();
-  alert(`Saved preset: ${name}`);
-}
-function loadPresetByName(name){
-  const p = getPresets();
-  const cfg = p[name];
-  if (!cfg){ alert('Preset not found'); return; }
-  cfg.n = Math.min(70, Math.max(2, cfg.n|0));
-  if (!Array.isArray(cfg.labels)) cfg.labels = [];
-  cfg.labels = cfg.labels.slice(0, cfg.n);
-  localStorage.setItem('tp-wheel-config', JSON.stringify(cfg));
-  localStorage.setItem('tp-wheel-last-preset', name);
-  // hydrate admin + redraw
-  modeSel.value = cfg.mode || 'random';
-  sectionsInput.value = cfg.n;
-  renderLabelInputs(cfg.labels);
-  buildTargetOptions(cfg.labels, cfg.target);
-  predefRow.classList.toggle('hidden', modeSel.value!=='predefined');
-  drawWheel();
-}
-function deletePresetByName(name){
-  const p = getPresets();
-  if (!p[name]) return;
-  delete p[name];
-  setPresets(p);
-  const last = localStorage.getItem('tp-wheel-last-preset');
-  if (last === name) localStorage.removeItem('tp-wheel-last-preset');
-  refreshPresetUI();
-  alert(`Deleted preset: ${name}`);
-}
-
-savePresetBtn?.addEventListener('click', ()=>{
-  const name = (presetNameInput.value||'').trim();
-  if (!name) return alert('Please enter a preset name.');
-  const p = getPresets();
-  if (p[name] && !confirm('Preset exists. Overwrite?')) return;
-  saveCurrentAsPreset(name);
-});
-deletePresetBtn?.addEventListener('click', ()=>{
-  const sel = presetSelect.value;
-  if (!sel) return alert('Select a preset to delete.');
-  if (confirm(`Delete preset "${sel}"?`)) deletePresetByName(sel);
-});
-presetSelect?.addEventListener('change', ()=>{
-  const sel = presetSelect.value;
-  if (sel) loadPresetByName(sel);
-});
-
-function tryLoadLastPreset(){
-  const last = localStorage.getItem('tp-wheel-last-preset');
-  const p = getPresets();
-  if (last && p[last]){
-    loadPresetByName(last);
-    return true;
-  }
-  return false;
-}
-
-// init
-if (!tryLoadLastPreset()) { loadConfig(true); } refreshPresetUI();
+// Init
+(async function init(){
+  await refreshPresetUI();
+  loadConfig(true);
+})();

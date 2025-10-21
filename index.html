@@ -63,16 +63,13 @@
         <input id="bulkFile" type="file" accept=".xlsx,.xls,.csv,.tsv,.txt" />
       </label>
 
-      
       <div class="divider"></div>
       <h3 style="margin:8px 0 0 0;">Presets</h3>
-      <p style="margin:4px 0 12px 0; opacity:.8;">Save your current setup with a name, quickly load it later, or delete.</p>
-
+      <p style="margin:4px 0 12px 0; opacity:.8;">Save/load/delete shared presets (stored on server).</p>
       <label class="row">
         <span>Preset name</span>
-        <input id="presetName" type="text" placeholder="e.g. Team A vs Team B" />
+        <input id="presetName" type="text" placeholder="e.g. Campaign A" />
       </label>
-
       <div class="row">
         <span>Load preset</span>
         <div style="display:grid; grid-template-columns: 1fr auto auto; gap:8px;">
@@ -83,7 +80,6 @@
       </div>
 
       <footer>
-
         <button id="saveConfig" class="btn primary" value="default">Save</button>
         <button id="resetConfig" class="btn subtle" formnovalidate>Reset</button>
       </footer>

@@ -1,9 +1,9 @@
-TP Wheel of Fortune v20
-- Easing-based spin so predefined results look natural (no snap).
-- Bulk import: paste names or upload .xlsx/.csv; caps at 24 sections.
-- Same TP styling, bezel, and pointer.
+TP Wheel of Fortune v26 — Shared Presets
+- Presets are stored in presets.json (repo root).
+- API route /api/presets handles GET/POST to read/write shared presets.
+- Everything else unchanged (easing spin, pointer, bezel, bulk import, 70-cap, single-line labels).
+
+Deploy on Vercel as a static app with serverless function.
 
 
-v21: Dynamic font sizing, 70-section cap.
-
-v22: Single-line labels + Presets (save/load/delete + auto-load last).
+v26a: Predefined reads live form values so Save is optional before spinning.
