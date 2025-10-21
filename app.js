@@ -1,4 +1,4 @@
-// TP Wheel v26b - predefined live read + shared presets with fallback
+// TP Wheel - Shared presets (Edge Config), instant-persist Admin controls
 const canvas = document.getElementById('wheel');
 const ctx = canvas.getContext('2d');
 const spinBtn = document.getElementById('spinBtn');
@@ -24,34 +24,13 @@ const deletePresetBtn = document.getElementById('deletePreset');
 const bulkTextEl = document.getElementById('bulkText');
 const bulkFileEl = document.getElementById('bulkFile');
 
-document.getElementById('resetConfig').onclick = (e)=>{
-  e.preventDefault();
-  localStorage.removeItem('tp-wheel-config');
-  loadConfig(true);
-};
-
-document.getElementById('saveConfig').onclick = (e)=>{
-  const n = parseInt(sectionsInput.value || '0', 10);
-  const labels = [];
-  for (let i=0;i<n;i++){
-    const v = document.getElementById('label_'+i).value.trim();
-    labels.push(v || `Option ${i+1}`);
-  }
-  const cfg = { mode: modeSel.value, n, labels, target: targetSel.value || null };
-  localStorage.setItem('tp-wheel-config', JSON.stringify(cfg));
-  buildTargetOptions(cfg.labels);
-  drawWheel();
-  adminDialog.close();
-};
-
-// ---- Shared Presets API (absolute paths) with local fallback ----
+// ---- Shared presets API (Edge Config via /api) with local fallback during dev ----
 async function apiGetPresets(){
   try{
-    const res = await fetch('/presets.json?ts=' + Date.now(), { cache: 'no-store' });
+    const res = await fetch('/api/presets?ts=' + Date.now(), { cache: 'no-store' });
     if (!res.ok) throw new Error('GET failed');
     return await res.json();
-  } catch(e){
-    // fallback to local (useful when running file:// or offline)
+  }catch(e){
     try { return JSON.parse(localStorage.getItem('tp-wheel-presets')||'{}'); } catch(_){ return {}; }
   }
 }
@@ -64,32 +43,17 @@ async function apiSavePresets(presets){
     });
     if (!res.ok) throw new Error('POST failed');
     return await res.json();
-  } catch(e){
-    // fallback store (local only) so user doesn't lose work when testing locally
-    localStorage.setItem('tp-wheel-presets', JSON.stringify(presets));
-    return { ok: true, local: true };
+  }catch(e){
+    localStorage.setItem('tp-wheel-presets', JSON.stringify(presets)); // local fallback in dev
+    return { ok:true, local:true };
   }
 }
 
 function getWorkingConfig(){
-  let cfg=null;
-  try{ cfg = JSON.parse(localStorage.getItem('tp-wheel-config')||'null'); }catch(e){}
-  if (!cfg){
-    cfg = { mode:'random', n:6, labels:['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'], target:null };
-    localStorage.setItem('tp-wheel-config', JSON.stringify(cfg));
-  }
-  return cfg;
+  try { return JSON.parse(localStorage.getItem('tp-wheel-config')||'null') || null; } catch(e){}
+  return null;
 }
-
-async function refreshPresetUI(){
-  const presets = await apiGetPresets();
-  presetSelect.innerHTML='';
-  const ph = document.createElement('option'); ph.value=''; ph.textContent='— Select preset —'; presetSelect.appendChild(ph);
-  Object.keys(presets).sort((a,b)=>a.localeCompare(b)).forEach(name=>{
-    const opt=document.createElement('option'); opt.value=name; opt.textContent=name; presetSelect.appendChild(opt);
-  });
-}
-
+function setWorkingConfig(cfg){ localStorage.setItem('tp-wheel-config', JSON.stringify(cfg)); }
 function cfgClamp(cfg){
   const out = JSON.parse(JSON.stringify(cfg || {}));
   out.n = Math.min(70, Math.max(2, parseInt(out.n||out.labels?.length||6,10)));
@@ -99,18 +63,48 @@ function cfgClamp(cfg){
   if (out.target != null) out.target = String(out.target);
   return out;
 }
+async function refreshPresetUI(){
+  const p = await apiGetPresets();
+  const names = Object.keys(p).sort((a,b)=>a.localeCompare(b));
+  presetSelect.innerHTML = '';
+  const ph = document.createElement('option'); ph.value=''; ph.textContent='— Select preset —'; presetSelect.appendChild(ph);
+  names.forEach(n=>{ const opt=document.createElement('option'); opt.value=n; opt.textContent=n; presetSelect.appendChild(opt); });
+  const last = localStorage.getItem('tp-wheel-last-preset');
+  if (last && p[last]){ for (const o of presetSelect.options){ if (o.value===last) o.selected=true; } }
+}
 
+// ---- Admin save/reset ----
+document.getElementById('resetConfig').onclick = (e)=>{
+  e.preventDefault();
+  localStorage.removeItem('tp-wheel-config');
+  loadConfig(true);
+};
+document.getElementById('saveConfig').onclick = (e)=>{
+  const n = Math.max(2, Math.min(70, parseInt(sectionsInput.value||'0',10)));
+  const labels = [];
+  for (let i=0;i<n;i++){
+    const v = document.getElementById('label_'+i).value.trim();
+    labels.push(v || `Option ${i+1}`);
+  }
+  const cfg = cfgClamp({ mode: modeSel.value, n, labels, target: targetSel.value || null });
+  setWorkingConfig(cfg);
+  buildTargetOptions(cfg.labels, cfg.target);
+  drawWheel();
+  adminDialog.close();
+};
+
+// ---- Presets save/load/delete (shared) ----
 savePresetBtn?.addEventListener('click', async ()=>{
   const name = (presetNameInput.value||'').trim();
   if (!name) return alert('Enter a preset name first.');
+  const cfg = getLiveConfigForSpin(); // capture current form
   const presets = await apiGetPresets();
-  const cfg = cfgClamp(getWorkingConfig());
-  presets[name] = cfg;
+  presets[name] = cfgClamp(cfg);
   const res = await apiSavePresets(presets);
-  if (res?.ok) { alert(res.local ? 'Preset saved locally (testing mode).' : 'Preset saved to server.'); }
+  alert(res?.local ? 'Preset saved locally (testing mode).' : 'Preset saved.');
+  localStorage.setItem('tp-wheel-last-preset', name);
   await refreshPresetUI();
 });
-
 deletePresetBtn?.addEventListener('click', async ()=>{
   const sel = presetSelect.value;
   if (!sel) return alert('Select a preset to delete.');
@@ -118,7 +112,9 @@ deletePresetBtn?.addEventListener('click', async ()=>{
   if (!presets[sel]) return;
   delete presets[sel];
   const res = await apiSavePresets(presets);
-  if (res?.ok) { alert(res.local ? 'Deleted locally (testing mode).' : 'Preset deleted.'); }
+  alert(res?.local ? 'Deleted locally (testing mode).' : 'Preset deleted.');
+  const last = localStorage.getItem('tp-wheel-last-preset');
+  if (last === sel) localStorage.removeItem('tp-wheel-last-preset');
   await refreshPresetUI();
 });
 presetSelect?.addEventListener('change', async ()=>{
@@ -128,7 +124,9 @@ presetSelect?.addEventListener('change', async ()=>{
   const cfg = presets[sel];
   if (!cfg) return alert('Preset not found.');
   const c = cfgClamp(cfg);
-  localStorage.setItem('tp-wheel-config', JSON.stringify(c));
+  setWorkingConfig(c);
+  localStorage.setItem('tp-wheel-last-preset', sel);
+  // hydrate UI
   modeSel.value = c.mode || 'random';
   sectionsInput.value = c.n;
   renderLabelInputs(c.labels);
@@ -139,11 +137,10 @@ presetSelect?.addEventListener('change', async ()=>{
 
 // ---- Config form dynamics ----
 function loadConfig(resetIfMissing=false){
-  let cfg = null;
-  try { cfg = JSON.parse(localStorage.getItem('tp-wheel-config')||'null'); } catch(e){}
+  let cfg = getWorkingConfig();
   if (!cfg || resetIfMissing){
     cfg = { mode:'random', n:6, labels:['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'], target:null };
-    localStorage.setItem('tp-wheel-config', JSON.stringify(cfg));
+    setWorkingConfig(cfg);
   }
   modeSel.value = cfg.mode;
   sectionsInput.value = cfg.n;
@@ -152,7 +149,12 @@ function loadConfig(resetIfMissing=false){
   predefRow.classList.toggle('hidden', modeSel.value!=='predefined');
   drawWheel();
 }
-modeSel.addEventListener('change', ()=> predefRow.classList.toggle('hidden', modeSel.value!=='predefined'));
+modeSel.addEventListener('change', ()=>{
+  predefRow.classList.toggle('hidden', modeSel.value!=='predefined');
+  const cfg = getWorkingConfig() || {};
+  cfg.mode = modeSel.value;
+  setWorkingConfig(cfg);
+});
 sectionsInput.addEventListener('change', ()=>{
   const n = Math.max(2, Math.min(70, parseInt(sectionsInput.value||'0',10)));
   sectionsInput.value = n;
@@ -171,8 +173,23 @@ function renderLabelInputs(labels){
     const row = document.createElement('div');
     row.className = 'label-row';
     row.innerHTML = `<div style="opacity:.7; padding:10px 0;">${i+1}</div>
-      <input id="label_${i}" type="text" value="${txt.replace(/"/g,'&quot;')}" placeholder="Label ${i+1}">`;
+      <input id="label_${i}" type="text" value="${(txt||'').replace(/\"/g,'&quot;')}" placeholder="Label ${i+1}">`;
     labelsWrap.appendChild(row);
+  });
+
+  // quick-persist labels
+  labels.forEach((_, i)=>{
+    const inp = document.getElementById('label_'+i);
+    if (inp) {
+      inp.addEventListener('change', ()=>{
+        const cfg = getWorkingConfig() || {mode:'random', n:labels.length, labels:[...labels], target:null};
+        cfg.labels[i] = inp.value.trim() || `Option ${i+1}`;
+        cfg.n = cfg.labels.length;
+        setWorkingConfig(cfg);
+        buildTargetOptions(cfg.labels, cfg.target);
+        drawWheel();
+      });
+    }
   });
 }
 function buildTargetOptions(labels, selected=null){
@@ -185,6 +202,12 @@ function buildTargetOptions(labels, selected=null){
     targetSel.appendChild(opt);
   });
 }
+// persist target immediately
+targetSel.addEventListener('change', ()=>{
+  const cfg = getWorkingConfig() || {};
+  cfg.target = targetSel.value;
+  setWorkingConfig(cfg);
+});
 
 // Bulk import utilities
 function normalizeNames(list){
@@ -194,11 +217,11 @@ function normalizeNames(list){
 }
 function applyNamesToConfig(names){
   if (!names || !names.length){ alert('No names found to import.'); return; }
-  const cfg = getWorkingConfig();
+  const cfg = getWorkingConfig() || {mode:'random',n:6,labels:[],target:null};
   cfg.n = names.length;
   cfg.labels = names;
   if (cfg.target != null && parseInt(cfg.target,10) >= cfg.n){ cfg.target = null; }
-  localStorage.setItem('tp-wheel-config', JSON.stringify(cfg));
+  setWorkingConfig(cfg);
   sectionsInput.value = cfg.n;
   renderLabelInputs(cfg.labels);
   buildTargetOptions(cfg.labels, cfg.target);
@@ -271,7 +294,7 @@ function drawSingleLineText(ctx, text, maxWidth, minPx, startPx){
 
 // Draw wheel
 function drawWheel(){
-  const cfg = getWorkingConfig();
+  const cfg = getWorkingConfig() || {mode:'random', n:6, labels:['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'], target:null};
   const W=canvas.width,H=canvas.height; const cx=W/2, cy=H/2, r=wheelRadius();
   ctx.clearRect(0,0,W,H); drawBezel(cx,cy,r);
   const n=Math.max(2, cfg.n|0), labels=cfg.labels||[]; const angle=(Math.PI*2)/n;
@@ -289,29 +312,10 @@ function drawWheel(){
   ctx.restore(); drawHub(cx,cy); drawPointer(cx,cy,r);
 }
 
-// --- Read LIVE form for predefined so Save isn't required ---
-function getLiveConfigForSpin(){
-  const cfg = getWorkingConfig();
-  const live = { ...cfg };
-  if (modeSel && modeSel.value) live.mode = modeSel.value;
-  const nInput = parseInt(sectionsInput?.value || live.n || 6, 10);
-  live.n = Math.max(2, Math.min(70, isNaN(nInput) ? (live.n||6) : nInput));
-  const labels = [];
-  for (let i=0;i<live.n;i++){
-    const el = document.getElementById('label_'+i);
-    labels.push(el ? (el.value.trim() || `Option ${i+1}`) : (cfg.labels[i] || `Option ${i+1}`));
-  }
-  live.labels = labels;
-  if (targetSel && targetSel.value !== undefined && targetSel.value !== null && targetSel.value !== '') {
-    live.target = targetSel.value;
-  }
-  return live;
-}
-
-// Rotation render + easing spin
+// Rotation render + predefined live read
 let spinning=false, rotation=0, animStart=0, animDuration=3200, startRot=0, totalDelta=0, plannedLabelIndex=null;
 function renderRotation(){
-  const cfg = getWorkingConfig();
+  const cfg = getWorkingConfig() || {mode:'random',n:6,labels:['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'],target:null};
   const W=canvas.width,H=canvas.height; const cx=W/2, cy=H/2, r=wheelRadius();
   ctx.clearRect(0,0,W,H); drawBezel(cx,cy,r);
   const n=Math.max(2, cfg.n|0), labels=cfg.labels||[]; const angle=(Math.PI*2)/n;
@@ -328,10 +332,28 @@ function renderRotation(){
   ctx.restore(); drawHub(cx,cy); drawPointer(cx,cy,r);
 }
 function easeOutCubic(x){ return 1 - Math.pow(1 - x, 3); }
+function getLiveConfigForSpin(){
+  const cfg = getWorkingConfig() || {mode:'random',n:6,labels:['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'],target:null};
+  const live = { ...cfg };
+  if (modeSel && modeSel.value) live.mode = modeSel.value;
+  const nInput = parseInt(sectionsInput?.value || live.n || 6, 10);
+  live.n = Math.max(2, Math.min(70, isNaN(nInput) ? (live.n||6) : nInput));
+  const labels = [];
+  for (let i=0;i<live.n;i++){
+    const el = document.getElementById('label_'+i);
+    labels.push(el ? (el.value.trim() || `Option ${i+1}`) : (cfg.labels[i] || `Option ${i+1}`));
+  }
+  live.labels = labels;
+  if (targetSel && targetSel.value !== undefined && targetSel.value !== null && targetSel.value !== '') {
+    live.target = targetSel.value;
+  }
+  return cfgClamp(live);
+}
 function raf(ts){ if(!spinning) return; if(!animStart) animStart=ts; const t=Math.min(1,(ts-animStart)/animDuration);
   rotation=startRot+totalDelta*easeOutCubic(t); renderRotation(); if(t>=1){ spinning=false; finalizeLanding(plannedLabelIndex); return; } requestAnimationFrame(raf); }
 function finalizeLanding(predefIndex=null){
-  const cfg = getWorkingConfig(); const n=Math.max(2,cfg.n|0); const anglePer=(Math.PI*2)/n; const twoPI=Math.PI*2;
+  const cfg = getWorkingConfig() || {mode:'random',n:6,labels:['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'],target:null};
+  const n=Math.max(2,cfg.n|0); const anglePer=(Math.PI*2)/n; const twoPI=Math.PI*2;
   if(predefIndex!==null){ const idx=predefIndex % n; resultEl.textContent = `Result: ${cfg.labels[idx] || `Option ${idx+1}`}`; return; }
   const current=((rotation % twoPI)+twoPI)%twoPI; const theta=((-Math.PI/2 - current) % twoPI + twoPI) % twoPI; const index=Math.floor(theta/anglePer)%n;
   resultEl.textContent = `Result: ${cfg.labels[index] || `Option ${index+1}`}`;
@@ -339,18 +361,25 @@ function finalizeLanding(predefIndex=null){
 spinBtn.addEventListener('click', ()=>{
   if (spinning) return;
   const cfg = getLiveConfigForSpin();
+  setWorkingConfig(cfg); // persist last used
   const n=Math.max(2,cfg.n|0); const anglePer=(Math.PI*2)/n; const twoPI=Math.PI*2;
   startRot=rotation; animStart=0; animDuration=2800+Math.random()*1200; const extraSpins=6+Math.floor(Math.random()*5); plannedLabelIndex=null;
-  if (cfg.mode==='predefined' && cfg.target!=null){ const idx=parseInt(cfg.target,10)%n; plannedLabelIndex=idx;
+  if (cfg.mode==='predefined' && cfg.target!=null && cfg.target!=='' && !Number.isNaN(parseInt(cfg.target,10))){
+    const idx=parseInt(cfg.target,10)%n; plannedLabelIndex=idx;
     const targetCenter=(idx+0.5)*anglePer; const desiredAbs=(-Math.PI/2 - targetCenter);
     const currentNorm=((rotation % twoPI)+twoPI)%twoPI; const delta=((desiredAbs - currentNorm)%twoPI + twoPI)%twoPI;
     const jitter=(Math.random()*0.4-0.2)*anglePer*0.5; totalDelta = extraSpins*twoPI + delta + jitter;
-  } else { totalDelta = extraSpins*twoPI + Math.random()*twoPI; }
+  } else {
+    plannedLabelIndex=null;
+    totalDelta = extraSpins*twoPI + Math.random()*twoPI;
+  }
   spinning=true; resultEl.textContent='Spinning...'; requestAnimationFrame(raf);
 });
 
 // Init
 (async function init(){
   await refreshPresetUI();
+  let cfg = getWorkingConfig();
+  if (!cfg){ cfg = { mode:'random', n:6, labels:['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'], target:null }; setWorkingConfig(cfg); }
   loadConfig(true);
 })();
