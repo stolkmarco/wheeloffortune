@@ -1,9 +1,7 @@
-TP Wheel of Fortune v26 — Shared Presets
-- Presets are stored in presets.json (repo root).
-- API route /api/presets handles GET/POST to read/write shared presets.
-- Everything else unchanged (easing spin, pointer, bezel, bulk import, 70-cap, single-line labels).
+TP Wheel of Fortune v26b
+Fixes:
+- Predefined reads LIVE admin values on spin (no need to click Save first).
+- Shared presets use absolute /api paths; when offline or local file://, saves fall back to local cache.
 
-Deploy on Vercel as a static app with serverless function.
-
-
-v26a: Predefined reads live form values so Save is optional before spinning.
+Note: On Vercel, writing to the repo filesystem may not persist. For durable shared presets,
+use a write-capable store (KV/DB). This build keeps your requested folder-based JSON for simplicity.

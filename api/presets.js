@@ -1,18 +1,21 @@
-// /api/presets.js - Vercel Serverless Function
-import { promises as fs } from 'fs';
-import path from 'path';
-
+// /api/presets.js - CommonJS for Vercel
+const fs = require('fs').promises;
+const path = require('path');
 const PRESETS_PATH = path.join(process.cwd(), 'presets.json');
 
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
   try {
     if (req.method === 'GET') {
-      const data = await fs.readFile(PRESETS_PATH, 'utf8').catch(async () => '{}');
+      let data = '{}';
+      try { data = await fs.readFile(PRESETS_PATH, 'utf8'); } catch(e){ /* not found */ }
       res.setHeader('Content-Type', 'application/json');
       return res.status(200).send(data);
     }
     if (req.method === 'POST') {
-      const body = req.body;
+      let body = req.body;
+      if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch(e){}
+      }
       if (!body || typeof body !== 'object') {
         return res.status(400).json({ error: 'Invalid presets payload' });
       }
@@ -25,4 +28,4 @@ export default async function handler(req, res) {
     console.error(e);
     return res.status(500).json({ error: 'Server error' });
   }
-}
+};

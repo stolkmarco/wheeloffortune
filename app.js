@@ -1,5 +1,4 @@
-// TP Wheel v26 - shared presets via /api/presets.js
-const brand = window.__TP_BRAND__ || {};
+// TP Wheel v26b - predefined live read + shared presets with fallback
 const canvas = document.getElementById('wheel');
 const ctx = canvas.getContext('2d');
 const spinBtn = document.getElementById('spinBtn');
@@ -21,13 +20,13 @@ const presetSelect = document.getElementById('presetSelect');
 const savePresetBtn = document.getElementById('savePreset');
 const deletePresetBtn = document.getElementById('deletePreset');
 
-// Bulk import elements
+// Bulk import
 const bulkTextEl = document.getElementById('bulkText');
 const bulkFileEl = document.getElementById('bulkFile');
 
 document.getElementById('resetConfig').onclick = (e)=>{
   e.preventDefault();
-  localStorage.removeItem('tp-wheel-config'); // current working set only
+  localStorage.removeItem('tp-wheel-config');
   loadConfig(true);
 };
 
@@ -45,20 +44,31 @@ document.getElementById('saveConfig').onclick = (e)=>{
   adminDialog.close();
 };
 
-// ---- Shared Presets API ----
+// ---- Shared Presets API (absolute paths) with local fallback ----
 async function apiGetPresets(){
-  const res = await fetch('./presets.json?ts=' + Date.now(), { cache: 'no-store' });
-  if (!res.ok) throw new Error('Failed to load presets.json');
-  return await res.json();
+  try{
+    const res = await fetch('/presets.json?ts=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) throw new Error('GET failed');
+    return await res.json();
+  } catch(e){
+    // fallback to local (useful when running file:// or offline)
+    try { return JSON.parse(localStorage.getItem('tp-wheel-presets')||'{}'); } catch(_){ return {}; }
+  }
 }
 async function apiSavePresets(presets){
-  const res = await fetch('./api/presets', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(presets)
-  });
-  if (!res.ok) throw new Error('Failed to save presets');
-  return await res.json();
+  try{
+    const res = await fetch('/api/presets', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(presets)
+    });
+    if (!res.ok) throw new Error('POST failed');
+    return await res.json();
+  } catch(e){
+    // fallback store (local only) so user doesn't lose work when testing locally
+    localStorage.setItem('tp-wheel-presets', JSON.stringify(presets));
+    return { ok: true, local: true };
+  }
 }
 
 function getWorkingConfig(){
@@ -72,7 +82,7 @@ function getWorkingConfig(){
 }
 
 async function refreshPresetUI(){
-  const presets = await apiGetPresets().catch(()=> ({}));
+  const presets = await apiGetPresets();
   presetSelect.innerHTML='';
   const ph = document.createElement('option'); ph.value=''; ph.textContent='— Select preset —'; presetSelect.appendChild(ph);
   Object.keys(presets).sort((a,b)=>a.localeCompare(b)).forEach(name=>{
@@ -93,34 +103,30 @@ function cfgClamp(cfg){
 savePresetBtn?.addEventListener('click', async ()=>{
   const name = (presetNameInput.value||'').trim();
   if (!name) return alert('Enter a preset name first.');
-  const presets = await apiGetPresets().catch(()=> ({}));
+  const presets = await apiGetPresets();
   const cfg = cfgClamp(getWorkingConfig());
   presets[name] = cfg;
-  try{
-    await apiSavePresets(presets);
-    alert('Preset saved to server.');
-    await refreshPresetUI();
-  }catch(e){ alert('Failed to save preset to server.'); }
+  const res = await apiSavePresets(presets);
+  if (res?.ok) { alert(res.local ? 'Preset saved locally (testing mode).' : 'Preset saved to server.'); }
+  await refreshPresetUI();
 });
 
 deletePresetBtn?.addEventListener('click', async ()=>{
   const sel = presetSelect.value;
   if (!sel) return alert('Select a preset to delete.');
-  const presets = await apiGetPresets().catch(()=> ({}));
+  const presets = await apiGetPresets();
   if (!presets[sel]) return;
   delete presets[sel];
-  try{
-    await apiSavePresets(presets);
-    alert('Preset deleted.');
-    await refreshPresetUI();
-  }catch(e){ alert('Failed to delete preset on server.'); }
+  const res = await apiSavePresets(presets);
+  if (res?.ok) { alert(res.local ? 'Deleted locally (testing mode).' : 'Preset deleted.'); }
+  await refreshPresetUI();
 });
 presetSelect?.addEventListener('change', async ()=>{
   const sel = presetSelect.value;
   if (!sel) return;
-  const presets = await apiGetPresets().catch(()=> ({}));
+  const presets = await apiGetPresets();
   const cfg = presets[sel];
-  if (!cfg) return alert('Preset not found on server.');
+  if (!cfg) return alert('Preset not found.');
   const c = cfgClamp(cfg);
   localStorage.setItem('tp-wheel-config', JSON.stringify(c));
   modeSel.value = c.mode || 'random';
@@ -283,7 +289,26 @@ function drawWheel(){
   ctx.restore(); drawHub(cx,cy); drawPointer(cx,cy,r);
 }
 
-// Rotation render
+// --- Read LIVE form for predefined so Save isn't required ---
+function getLiveConfigForSpin(){
+  const cfg = getWorkingConfig();
+  const live = { ...cfg };
+  if (modeSel && modeSel.value) live.mode = modeSel.value;
+  const nInput = parseInt(sectionsInput?.value || live.n || 6, 10);
+  live.n = Math.max(2, Math.min(70, isNaN(nInput) ? (live.n||6) : nInput));
+  const labels = [];
+  for (let i=0;i<live.n;i++){
+    const el = document.getElementById('label_'+i);
+    labels.push(el ? (el.value.trim() || `Option ${i+1}`) : (cfg.labels[i] || `Option ${i+1}`));
+  }
+  live.labels = labels;
+  if (targetSel && targetSel.value !== undefined && targetSel.value !== null && targetSel.value !== '') {
+    live.target = targetSel.value;
+  }
+  return live;
+}
+
+// Rotation render + easing spin
 let spinning=false, rotation=0, animStart=0, animDuration=3200, startRot=0, totalDelta=0, plannedLabelIndex=null;
 function renderRotation(){
   const cfg = getWorkingConfig();
@@ -302,43 +327,19 @@ function renderRotation(){
   }
   ctx.restore(); drawHub(cx,cy); drawPointer(cx,cy,r);
 }
-
-
-function getLiveConfigForSpin(){
-  // Read what's on the form right now, fall back to working config if missing
-  const cfg = getWorkingConfig();
-  const live = { ...cfg };
-  // mode
-  if (modeSel && modeSel.value) live.mode = modeSel.value;
-  // n and labels from inputs (if present)
-  const nInput = parseInt(sectionsInput?.value || live.n || 6, 10);
-  live.n = Math.max(2, Math.min(70, isNaN(nInput) ? (live.n||6) : nInput));
-  const labels = [];
-  for (let i=0;i<live.n;i++){
-    const el = document.getElementById('label_'+i);
-    labels.push(el ? el.value.trim() || `Option ${i+1}` : (cfg.labels[i] || `Option ${i+1}`));
-  }
-  live.labels = labels;
-  // target
-  if (targetSel && targetSel.value !== undefined && targetSel.value !== null && targetSel.value !== '') {
-    live.target = targetSel.value;
-  }
-  return live;
-}
-
-// Easing spin
 function easeOutCubic(x){ return 1 - Math.pow(1 - x, 3); }
 function raf(ts){ if(!spinning) return; if(!animStart) animStart=ts; const t=Math.min(1,(ts-animStart)/animDuration);
   rotation=startRot+totalDelta*easeOutCubic(t); renderRotation(); if(t>=1){ spinning=false; finalizeLanding(plannedLabelIndex); return; } requestAnimationFrame(raf); }
 function finalizeLanding(predefIndex=null){
-  const cfg = getLiveConfigForSpin(); const n=Math.max(2,cfg.n|0); const anglePer=(Math.PI*2)/n; const twoPI=Math.PI*2;
+  const cfg = getWorkingConfig(); const n=Math.max(2,cfg.n|0); const anglePer=(Math.PI*2)/n; const twoPI=Math.PI*2;
   if(predefIndex!==null){ const idx=predefIndex % n; resultEl.textContent = `Result: ${cfg.labels[idx] || `Option ${idx+1}`}`; return; }
   const current=((rotation % twoPI)+twoPI)%twoPI; const theta=((-Math.PI/2 - current) % twoPI + twoPI) % twoPI; const index=Math.floor(theta/anglePer)%n;
   resultEl.textContent = `Result: ${cfg.labels[index] || `Option ${index+1}`}`;
 }
 spinBtn.addEventListener('click', ()=>{
   if (spinning) return;
-  const cfg = getLiveConfigForSpin(); const n=Math.max(2,cfg.n|0); const anglePer=(Math.PI*2)/n; const twoPI=Math.PI*2;
+  const cfg = getLiveConfigForSpin();
+  const n=Math.max(2,cfg.n|0); const anglePer=(Math.PI*2)/n; const twoPI=Math.PI*2;
   startRot=rotation; animStart=0; animDuration=2800+Math.random()*1200; const extraSpins=6+Math.floor(Math.random()*5); plannedLabelIndex=null;
   if (cfg.mode==='predefined' && cfg.target!=null){ const idx=parseInt(cfg.target,10)%n; plannedLabelIndex=idx;
     const targetCenter=(idx+0.5)*anglePer; const desiredAbs=(-Math.PI/2 - targetCenter);
