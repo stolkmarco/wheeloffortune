@@ -103,7 +103,7 @@ savePresetBtn?.addEventListener('click', async ()=>{
   const res = await apiSavePresets(presets);
   alert(res?.local ? 'Preset saved locally (testing mode).' : 'Preset saved.');
   localStorage.setItem('tp-wheel-last-preset', name);
-  await refreshPresetUI();
+  await refreshPresetUI(); for(const o of presetSelect.options){ if(o.value===name) o.selected=true; }
 });
 deletePresetBtn?.addEventListener('click', async ()=>{
   const sel = presetSelect.value;
@@ -115,7 +115,7 @@ deletePresetBtn?.addEventListener('click', async ()=>{
   alert(res?.local ? 'Deleted locally (testing mode).' : 'Preset deleted.');
   const last = localStorage.getItem('tp-wheel-last-preset');
   if (last === sel) localStorage.removeItem('tp-wheel-last-preset');
-  await refreshPresetUI();
+  await refreshPresetUI(); for(const o of presetSelect.options){ if(o.value===name) o.selected=true; }
 });
 presetSelect?.addEventListener('change', async ()=>{
   const sel = presetSelect.value;
@@ -378,7 +378,7 @@ spinBtn.addEventListener('click', ()=>{
 
 // Init
 (async function init(){
-  await refreshPresetUI();
+  await refreshPresetUI(); for(const o of presetSelect.options){ if(o.value===name) o.selected=true; }
   let cfg = getWorkingConfig();
   if (!cfg){ cfg = { mode:'random', n:6, labels:['Alpha','Bravo','Charlie','Delta','Echo','Foxtrot'], target:null }; setWorkingConfig(cfg); }
   loadConfig(true);
