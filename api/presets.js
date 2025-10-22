@@ -1,9 +1,9 @@
 // /api/presets.js — Supabase (REST) with flexible env var names
-// Supported envs (either standard or prefixed with WHEELOF_):
-//   SUPABASE_URL                      | WHEELOF_SUPABASE_URL
-//   SUPABASE_SERVICE_ROLE_KEY         | WHEELOF_SUPABASE_SERVICE_ROLE_KEY
-//   SUPABASE_SCHEMA (optional)        | WHEELOF_SUPABASE_SCHEMA
-//   SUPABASE_TABLE  (optional)        | WHEELOF_SUPABASE_TABLE
+// Supported envs (any of these will work; first one found wins):
+//   SUPABASE_URL                        | WHEELOFTP_SUPABASE_URL
+//   SUPABASE_SERVICE_ROLE_KEY           | WHEELOFTP_SUPABASE_SERVICE_ROLE_KEY
+//   SUPABASE_SCHEMA (optional)          | WHEELOFTP_SUPABASE_SCHEMA   (default 'public')
+//   SUPABASE_TABLE  (optional)          | WHEELOFTP_SUPABASE_TABLE    (default 'presets')
 //
 // Table (run once in Supabase SQL editor):
 //   create table if not exists public.presets (
@@ -14,23 +14,34 @@
 
 const fetchFn = global.fetch || require('node-fetch');
 
-function env(...keys){ for(const k of keys){ if(process.env[k]) return process.env[k]; } return undefined; }
-
-const SB_URL  = env('SUPABASE_URL','WHEELOF_SUPABASE_URL');
-const SB_KEY  = env('SUPABASE_SERVICE_ROLE_KEY','WHEELOF_SUPABASE_SERVICE_ROLE_KEY');
-const SCHEMA  = env('SUPABASE_SCHEMA','WHEELOF_SUPABASE_SCHEMA') || 'public';
-const TABLE   = env('SUPABASE_TABLE','WHEELOF_SUPABASE_TABLE') || 'presets';
-
-if (!SB_URL || !SB_KEY) {
-  console.warn("Supabase env missing. Set SUPABASE_URL & SUPABASE_SERVICE_ROLE_KEY (or WHEELOF_ equivalents).");
+// helper to read the first defined env var from a list
+function env(...keys) {
+  for (const k of keys) if (process.env[k]) return process.env[k];
+  return undefined;
 }
 
-function tableUrl() { return `${SB_URL}/rest/v1/${TABLE}`; }
+const SB_URL = env('SUPABASE_URL', 'WHEELOFTP_SUPABASE_URL');
+const SB_KEY = env('SUPABASE_SERVICE_ROLE_KEY', 'WHEELOFTP_SUPABASE_SERVICE_ROLE_KEY');
+const SCHEMA = env('SUPABASE_SCHEMA', 'WHEELOFTP_SUPABASE_SCHEMA') || 'public';
+const TABLE  = env('SUPABASE_TABLE',  'WHEELOFTP_SUPABASE_TABLE')  || 'presets';
+
+if (!SB_URL || !SB_KEY) {
+  console.warn('Supabase env missing. Set SUPABASE_URL & SUPABASE_SERVICE_ROLE_KEY (or WHEELOFTP_ equivalents).');
+}
+
+// Build REST URL, e.g. https://<project>.supabase.co/rest/v1/presets
+function tableUrl() {
+  return `${SB_URL}/rest/v1/${TABLE}`;
+}
 
 async function sbGetAll() {
   const url = `${tableUrl()}?select=name,data,updated_at&order=name.asc`;
-  const res = await (fetchFn)(url, {
-    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, Accept: 'application/json' }
+  const res = await fetchFn(url, {
+    headers: {
+      apikey: SB_KEY,
+      Authorization: `Bearer ${SB_KEY}`,
+      Accept: 'application/json',
+    },
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`Supabase GET ${res.status}: ${text}`);
@@ -42,18 +53,20 @@ async function sbGetAll() {
 
 async function sbUpsertAll(obj) {
   const rows = Object.entries(obj).map(([name, data]) => ({
-    name, data, updated_at: new Date().toISOString()
+    name,
+    data,
+    updated_at: new Date().toISOString(),
   }));
   const url = `${tableUrl()}?on_conflict=name`;
-  const res = await (fetchFn)(url, {
+  const res = await fetchFn(url, {
     method: 'POST',
     headers: {
       apikey: SB_KEY,
       Authorization: `Bearer ${SB_KEY}`,
       'Content-Type': 'application/json',
-      Prefer: 'resolution=merge-duplicates'
+      Prefer: 'resolution=merge-duplicates',
     },
-    body: JSON.stringify(rows)
+    body: JSON.stringify(rows),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`Supabase UPSERT ${res.status}: ${text}`);
@@ -71,8 +84,11 @@ module.exports = async (req, res) => {
 
     if (req.method === 'POST') {
       let body = req.body;
-      if (typeof body === 'string') { try { body = JSON.parse(body); } catch {} }
-      if (!body || typeof body !== 'object') return res.status(400).json({ error: 'Invalid presets payload' });
+      if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch {}
+      }
+      if (!body || typeof body !== 'object')
+        return res.status(400).json({ error: 'Invalid presets payload' });
 
       const r = await sbUpsertAll(body);
       return res.status(200).json(r);
